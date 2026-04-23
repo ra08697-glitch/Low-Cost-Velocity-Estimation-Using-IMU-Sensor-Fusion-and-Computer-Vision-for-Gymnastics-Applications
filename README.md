@@ -1,3 +1,6 @@
+![System in Action](./Estimated_Pose.jpg)
+*Real-time pose estimation and velocity calculation running on the Jetson Orin Nano.*
+
 # Gymnast Velocity Tracking System
 ### Low-Cost, Real-Time Center of Mass (CoM) Estimation 
 
