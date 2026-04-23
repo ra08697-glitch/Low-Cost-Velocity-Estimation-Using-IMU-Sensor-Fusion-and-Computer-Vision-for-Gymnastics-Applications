@@ -61,4 +61,4 @@ python3 python/gymnast_tracker_imx477.py
 This project was developed at **Georgia Southern University** for the 2026 Student Research Symposium. It represents an advancement in low-cost sports biomechanics, moving elite-level data out of the lab and into the gym.
 
 ## ⚖️ License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
