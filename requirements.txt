@@ -1,11 +1,13 @@
 # Core Computer Vision & AI
 ultralytics>=8.0.0
-opencv-python
-numpy<2.0.0
+# Note: Use numpy < 2.0.0 to maintain compatibility with current PyTorch wheels
+numpy>=1.26,<2.0.0
 
 # Hardware Communication
 pyserial
 
 # Dependencies for Jetson/ARM
-# Note: torch and torchvision should be installed via NVIDIA's 
-# JetPack wheels rather than pip for GPU acceleration.
+# ---------------------------
+# Note: torch and torchvision must be installed via NVIDIA's JetPack wheels
+# for GPU acceleration. OpenCV should be built from source for CSI support.
+# Refer to REPLICATION_GUIDE.md for specific build instructions.
