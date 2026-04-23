@@ -1,4 +1,4 @@
-![System in Action](https://github.com/ra08697-glitch/Low-Cost-Velocity-Estimation-Using-IMU-Sensor-Fusion-and-Computer-Vision-for-Gymnastics-Applications/blob/proof-of-concept/Estimated%20Pose.jpg?raw=true)
+![System in Action](https://github.com/ra08697-glitch/Low-Cost-Velocity-Estimation-Using-IMU-Sensor-Fusion-and-Computer-Vision-for-Gymnastics-Applications/blob/proof-of-concept/stills/Estimated%20Pose.jpg?raw=true)
 
 *Real-time pose estimation and velocity calculation running on the Jetson Orin Nano.*
 
