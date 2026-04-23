@@ -179,9 +179,9 @@ void loop() {
     // Comment out this block if you only want trial data
     if (!logging && (now_ms - last_log_ms >= LOG_INTERVAL_MS)) {
         last_log_ms = now_ms;
-        Serial.print("Ax(m/s2):"); Serial.print(ax_hp,3); Serial.print(",");
-        Serial.print("Ay(m/s2):"); Serial.print(ay_hp,3); Serial.print(",");
-        Serial.print("Az(m/s2):"); Serial.print(az_hp,3); Serial.print(",");
+        //Serial.print("Ax(m/s2):"); Serial.print(ax_hp,3); Serial.print(",");
+        //Serial.print("Ay(m/s2):"); Serial.print(ay_hp,3); Serial.print(",");
+        //Serial.print("Az(m/s2):"); Serial.print(az_hp,3); Serial.print(",");
         Serial.print("Vx(m/s):");  Serial.print(vx,3);    Serial.print(",");
         Serial.print("Vy(m/s):");  Serial.print(vy,3);    Serial.print(",");
         Serial.print("Vz(m/s):");  Serial.print(vz,3);    Serial.print(",");
