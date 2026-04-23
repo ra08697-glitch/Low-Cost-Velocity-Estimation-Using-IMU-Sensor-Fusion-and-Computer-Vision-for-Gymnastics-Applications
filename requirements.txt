@@ -1,0 +1,11 @@
+# Core Computer Vision & AI
+ultralytics>=8.0.0
+opencv-python
+numpy<2.0.0
+
+# Hardware Communication
+pyserial
+
+# Dependencies for Jetson/ARM
+# Note: torch and torchvision should be installed via NVIDIA's 
+# JetPack wheels rather than pip for GPU acceleration.
