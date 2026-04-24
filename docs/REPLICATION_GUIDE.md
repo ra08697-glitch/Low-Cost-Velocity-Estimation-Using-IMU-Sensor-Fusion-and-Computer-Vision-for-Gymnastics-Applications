@@ -1,3 +1,5 @@
+![Experimental Setup](../images/setup.jpg)
+
 # Gymnast Velocity Tracking System — Replication Guide
 
 **Project:** Low-Cost Gymnast Velocity Tracking via Computer Vision and IMU  
