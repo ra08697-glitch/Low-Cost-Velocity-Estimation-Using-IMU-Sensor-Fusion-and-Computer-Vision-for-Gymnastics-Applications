@@ -24,7 +24,7 @@ To solve "teleportation" errors and keypoint jitter, the system uses **Triple-Ch
 3. **Peak Validation:** Top speeds are only recorded during high-certainty (>0.75) detection windows.
 
 ### Sensor Fusion Telemetry
-![IMU Velocity Telemetry](images/imu.png)
+
 *Figure 2: Real-time velocity telemetry showing multi-axis acceleration and integrated speed data used for sensor fusion validation.*
 
 ## 📂 Repository Structure
