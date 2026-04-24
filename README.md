@@ -32,8 +32,8 @@ To solve "teleportation" errors and keypoint jitter, the system uses **Triple-Ch
 
 ### 1. Hardware Setup
 Before running the code, ensure your Jetson is configured for the IMX477 camera and your Arduino is flashed.
-* See [REPLICATION_GUIDE.md](./REPLICATION_GUIDE.md) for the full Jetson environment setup.
-* See [TRIAL_PROTOCOL_AND_ENCLOSURES.md](./TRIAL_PROTOCOL_AND_ENCLOSURES.md) for mounting and trial instructions.
+* See [REPLICATION_GUIDE.md](docs/REPLICATION_GUIDE.md) for the full Jetson environment setup.
+* See [TRIAL_PROTOCOL_AND_ENCLOSURES.md](docs/TRIAL_PROTOCOL_AND_ENCLOSURES.md) for mounting and trial instructions.
 
 ### 2. Software Install
 ```bash
