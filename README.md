@@ -23,6 +23,10 @@ To solve "teleportation" errors and keypoint jitter, the system uses **Triple-Ch
 2. **Physiological Clamp:** Discards any movement >12.0 m/s (based on human sprinting limits).
 3. **Peak Validation:** Top speeds are only recorded during high-certainty (>0.75) detection windows.
 
+### Sensor Fusion Telemetry
+![IMU Velocity Telemetry](images/imu.png)
+*Figure 2: Real-time velocity telemetry showing multi-axis acceleration and integrated speed data used for sensor fusion validation.*
+
 ## 📂 Repository Structure
 * `/python`: Main CV tracking scripts and Jetson inference code.
 * `/arduino`: Firmware for the Nano 33 BLE velocity logger.
