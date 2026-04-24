@@ -1,5 +1,3 @@
-![Experimental Setup](../images/setup.HEIC)
-
 # Gymnast Velocity Tracking System — Replication Guide
 
 **Project:** Low-Cost Gymnast Velocity Tracking via Computer Vision and IMU  
