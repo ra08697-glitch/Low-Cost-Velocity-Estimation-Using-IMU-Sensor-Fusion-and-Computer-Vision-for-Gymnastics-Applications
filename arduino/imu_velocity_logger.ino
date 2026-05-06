@@ -1,154 +1,190 @@
-from ultralytics import YOLO
-import cv2, numpy as np, time
-from collections import deque
+/*
+ * Gymnast IMU Velocity Tracker — Data Logging Version
+ * Hardware: Arduino Nano 33 BLE Rev2 (BMI270)
+ * 
+ * Outputs:
+ *   - Serial: CSV at 115200 baud for real-time monitoring
+ *   - Serial commands: 'r' = reset velocity, 's' = start/stop trial logging
+ * 
+ * Mount location: Sternum (chest)
+ * Orientation: USB connector pointing down
+ */
 
-# ── Configuration ──────────────────────────────────────────────────────────
-WIDTH, HEIGHT       = 1920, 1080
-FPS                 = 60
-PIXELS_PER_METER    = 150    # CALIBRATE before each session — see calibration protocol
-SMOOTHING_FRAMES    = 5
+#include "Arduino_BMI270_BMM150.h"
+#include <Wire.h>
 
-# ── Velocity filtering thresholds ──────────────────────────────────────────
-# These three values are the primary quality control parameters.
-# Adjust KP_CONF_COM down if valid detections are being skipped in good lighting.
-# Adjust MAX_PLAUSIBLE_SPEED up slightly if tracking elite sprinters (>10 m/s).
-KP_CONF_COM         = 0.6    # min keypoint confidence to compute CoM
-                              # 0.3 = permissive (original), 0.6 = recommended, 0.8 = strict
-KP_CONF_PEAK        = 0.75   # min keypoint confidence to update peak speed record
-                              # higher than KP_CONF_COM — peak should only reflect clean detections
-MAX_PLAUSIBLE_SPEED = 12.0   # m/s — readings above this are discarded as artifacts
-                              # world-record 100m sprint avg ~10.4 m/s, peak ~12.4 m/s
+// ── Configuration ─────────────────────────────────────────────────────────────
+const float G_TO_MS2        = 9.81;
+const float STILL_THRESHOLD = 2.0;    // m/s² — tune if false resets occur
+const int   ZERO_VEL_COUNT  = 20;     // ~200ms at 104Hz before reset
+const float HP_ALPHA        = 0.95;   // high-pass filter (0.9=aggressive, 0.99=gentle)
+const int   LOG_INTERVAL_MS = 10;     // log every 10ms = 100Hz output rate
 
-KP = dict(l_hip=11, r_hip=12)
+// ── State ─────────────────────────────────────────────────────────────────────
+float vx=0, vy=0, vz=0;
+float ax_hp=0, ay_hp=0, az_hp=0;
+float ax_prev=0, ay_prev=0, az_prev=0;
+unsigned long last_us=0;
+unsigned long last_log_ms=0;
+int still_count=0;
+bool logging=false;
+unsigned long trial_start_ms=0;
+unsigned long sample_count=0;
+float peak_speed=0;
 
-# ── GStreamer pipeline ──────────────────────────────────────────────────────
-def gstreamer_pipeline(width=1920, height=1080, fps=60, flip=0):
-    return (
-        f"nvarguscamerasrc sensor-id=0 ! "
-        f"video/x-raw(memory:NVMM),width={width},height={height},framerate={fps}/1 ! "
-        f"nvvidconv flip-method={flip} ! "
-        f"video/x-raw,width={width},height={height},format=BGRx ! "
-        f"videoconvert ! video/x-raw,format=BGR ! appsink max-buffers=1 drop=true"
-    )
+// ── IMU Setup ──────────────────────────────────────────────────────────────────
+void setRange16g() {
+    // BMI270 ACC_RANGE register: 0x41, value 0x03 = ±16g
+    Wire1.beginTransmission(0x68);
+    Wire1.write(0x41);
+    Wire1.write(0x03);
+    Wire1.endTransmission();
+    delay(10);
+}
 
-# ── CoM from hip keypoints ──────────────────────────────────────────────────
-def center_of_mass(kps):
-    l, r = kps[KP['l_hip']], kps[KP['r_hip']]
-    # Both hips must exceed confidence threshold — partial detections are skipped
-    if l[2] > KP_CONF_COM and r[2] > KP_CONF_COM:
-        return np.array([(l[0]+r[0])/2, (l[1]+r[1])/2])
-    return None
+void calibrate() {
+    Serial.println("# Hold still for 2-second calibration...");
+    float bx=0, by=0, bz=0;
+    int n=0;
+    unsigned long t=millis();
+    while (millis()-t < 2000) {
+        if (IMU.accelerationAvailable()) {
+            float ax, ay, az;
+            IMU.readAcceleration(ax, ay, az);
+            bx += ax*4.0*G_TO_MS2;
+            by += ay*4.0*G_TO_MS2;
+            bz += az*4.0*G_TO_MS2;
+            n++;
+        }
+    }
+    ax_prev = bx/n;
+    ay_prev = by/n;
+    az_prev = bz/n;
+    Serial.print("# Calibration complete. Bias: ");
+    Serial.print(ax_prev,3); Serial.print(", ");
+    Serial.print(ay_prev,3); Serial.print(", ");
+    Serial.println(az_prev,3);
+}
 
-# ── Least-squares velocity over history window ──────────────────────────────
-def compute_velocity(history, px_per_m):
-    if len(history) < 2: return None, None
-    positions = [h[0] for h in history]
-    times     = [h[1] for h in history]
-    t  = np.array(times) - times[0]
-    px = np.array(positions)
-    if len(t) >= 3:
-        vx = np.polyfit(t, px[:,0], 1)[0]
-        vy = np.polyfit(t, px[:,1], 1)[0]
-    else:
-        dt = times[-1] - times[0]
-        if dt < 1e-6: return None, None
-        vx = (px[-1,0]-px[0,0])/dt
-        vy = (px[-1,1]-px[0,1])/dt
-    speed = np.sqrt((vx/px_per_m)**2 + (vy/px_per_m)**2)
-    return speed, np.array([vx/px_per_m, vy/px_per_m])
+// ── Setup ──────────────────────────────────────────────────────────────────────
+void setup() {
+    Serial.begin(115200);
+    while (!Serial);
+    Wire1.begin();
 
-# ── Main loop ───────────────────────────────────────────────────────────────
-def main():
-    model = YOLO('yolov8n-pose.pt')
+    if (!IMU.begin()) {
+        Serial.println("# ERROR: IMU failed to initialize!");
+        while (1);
+    }
 
-    print("Opening IMX477 via GStreamer...")
-    cap = cv2.VideoCapture(gstreamer_pipeline(WIDTH, HEIGHT, FPS), cv2.CAP_GSTREAMER)
-    if not cap.isOpened():
-        print("ERROR: Could not open IMX477.")
-        print("Check: camera connected, IMX477-A overlay loaded (jetson-io.py), OpenCV built with GStreamer")
-        return
+    setRange16g();
+    calibrate();
 
-    for _ in range(3): cap.read()
-    ret, frame = cap.read()
-    if not ret:
-        print("ERROR: Could not read frame from IMX477.")
-        return
+    Serial.println("# Commands: 's' = start/stop trial, 'r' = reset velocity, 'c' = recalibrate");
+    Serial.println("# CSV format: timestamp_ms,ax,ay,az,vx,vy,vz,speed,peak_speed");
+    Serial.println("timestamp_ms,ax_mps2,ay_mps2,az_mps2,vx_mps,vy_mps,vz_mps,speed_mps,peak_mps");
 
-    # Warmup inference pass — avoids latency spike on first real frame
-    model(frame, verbose=False, device='cuda')
-    print(f"IMX477 ready — {WIDTH}x{HEIGHT}@{FPS}fps")
-    print(f"Filters: CoM conf>{KP_CONF_COM} | Peak conf>{KP_CONF_PEAK} | Max speed<{MAX_PLAUSIBLE_SPEED}m/s")
-    print("Press Q to quit.")
+    last_us = micros();
+    last_log_ms = millis();
+}
 
-    history        = deque(maxlen=SMOOTHING_FRAMES)
-    fps_hist       = deque(maxlen=30)
-    peak_speed     = 0.0
-    discarded      = 0   # frames discarded by speed clamp — logged at exit
+// ── Main Loop ──────────────────────────────────────────────────────────────────
+void loop() {
 
-    while True:
-        ret, frame = cap.read()
-        if not ret: break
-        t0 = time.time()
+    // Handle serial commands
+    if (Serial.available()) {
+        char cmd = Serial.read();
+        if (cmd == 's') {
+            logging = !logging;
+            if (logging) {
+                trial_start_ms = millis();
+                peak_speed = 0;
+                sample_count = 0;
+                vx = vy = vz = 0;
+                Serial.println("# TRIAL STARTED");
+            } else {
+                Serial.print("# TRIAL ENDED — samples: ");
+                Serial.print(sample_count);
+                Serial.print(" | peak speed: ");
+                Serial.print(peak_speed, 3);
+                Serial.println(" m/s");
+            }
+        } else if (cmd == 'r') {
+            vx = vy = vz = 0;
+            peak_speed = 0;
+            Serial.println("# Velocity reset");
+        } else if (cmd == 'c') {
+            calibrate();
+        }
+    }
 
-        results = model(frame, verbose=False, device='cuda')
-        fps_hist.append(1.0 / (time.time() - t0 + 1e-6))
-        annotated    = results[0].plot()
-        speed_display = None
+    if (!IMU.accelerationAvailable()) return;
 
-        if results[0].keypoints is not None and len(results[0].keypoints.data) > 0:
-            kps = results[0].keypoints.data[0].cpu().numpy()
-            com = center_of_mass(kps)
+    // Read and scale to ±16g
+    float ax_raw, ay_raw, az_raw;
+    IMU.readAcceleration(ax_raw, ay_raw, az_raw);
+    float ax = ax_raw * 4.0 * G_TO_MS2;
+    float ay = ay_raw * 4.0 * G_TO_MS2;
+    float az = az_raw * 4.0 * G_TO_MS2;
 
-            if com is not None:
-                history.append((com, t0))
-                speed, vec = compute_velocity(history, PIXELS_PER_METER)
+    // High-pass filter — removes gravity and low-frequency drift
+    ax_hp = HP_ALPHA * (ax_hp + ax - ax_prev);
+    ay_hp = HP_ALPHA * (ay_hp + ay - ay_prev);
+    az_hp = HP_ALPHA * (az_hp + az - az_prev);
+    ax_prev = ax;
+    ay_prev = ay;
+    az_prev = az;
 
-                if speed is not None:
-                    if speed > MAX_PLAUSIBLE_SPEED:
-                        # Physically impossible — artifact from partial/erratic detection
-                        # Clear history so poisoned positions don't influence next frames
-                        discarded += 1
-                        history.clear()
-                    else:
-                        speed_display = speed
+    // Timing
+    unsigned long now_us = micros();
+    float dt = (now_us - last_us) / 1e6;
+    last_us = now_us;
 
-                        # Peak update — only when both hips are cleanly detected
-                        l_conf = kps[KP['l_hip']][2]
-                        r_conf = kps[KP['r_hip']][2]
-                        if min(l_conf, r_conf) > KP_CONF_PEAK:
-                            peak_speed = max(peak_speed, speed)
+    // Zero-velocity update
+    float accel_mag = sqrt(ax_hp*ax_hp + ay_hp*ay_hp + az_hp*az_hp);
+    if (accel_mag < STILL_THRESHOLD) {
+        still_count++;
+        if (still_count >= ZERO_VEL_COUNT) {
+            vx = vy = vz = 0;
+        }
+    } else {
+        still_count = 0;
+        vx += ax_hp * dt;
+        vy += ay_hp * dt;
+        vz += az_hp * dt;
+    }
 
-                        # Draw CoM marker and velocity arrow
-                        cx, cy = int(com[0]), int(com[1])
-                        cv2.circle(annotated, (cx, cy), 10, (0, 0, 255), -1)
-                        if vec is not None and np.linalg.norm(vec) > 0.1:
-                            ex = int(cx + vec[0] * 50)
-                            ey = int(cy + vec[1] * 50)
-                            cv2.arrowedLine(annotated, (cx,cy), (ex,ey), (0,255,255), 3, tipLength=0.3)
+    float speed = sqrt(vx*vx + vy*vy + vz*vz);
+    if (speed > peak_speed) peak_speed = speed;
 
-        # HUD
-        avg_fps = sum(fps_hist) / len(fps_hist)
-        cv2.putText(annotated, f"FPS: {avg_fps:.1f}", (20, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,255,0), 3)
-        cv2.putText(annotated, f"IMX477 CSI {WIDTH}x{HEIGHT}@{FPS} | discarded: {discarded}",
-                    (20, HEIGHT-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 2)
+    // Log at defined interval
+    unsigned long now_ms = millis();
+    if (logging && (now_ms - last_log_ms >= LOG_INTERVAL_MS)) {
+        last_log_ms = now_ms;
+        sample_count++;
 
-        if speed_display is not None:
-            color = (0,255,0) if speed_display < 3 else (0,165,255) if speed_display < 6 else (0,0,255)
-            cv2.putText(annotated, f"Speed: {speed_display:.2f} m/s", (20, 100),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 4)
-            cv2.putText(annotated, f"Peak:  {peak_speed:.2f} m/s", (20, 155),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,0), 3)
+        unsigned long t_rel = now_ms - trial_start_ms;
+        Serial.print(t_rel);        Serial.print(",");
+        Serial.print(ax_hp, 3);     Serial.print(",");
+        Serial.print(ay_hp, 3);     Serial.print(",");
+        Serial.print(az_hp, 3);     Serial.print(",");
+        Serial.print(vx, 3);        Serial.print(",");
+        Serial.print(vy, 3);        Serial.print(",");
+        Serial.print(vz, 3);        Serial.print(",");
+        Serial.print(speed, 3);     Serial.print(",");
+        Serial.println(peak_speed, 3);
+    }
 
-        cv2.imshow('Gymnast Tracker — IMX477', cv2.resize(annotated, (1280, 720)))
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-    print(f"\nSession summary:")
-    print(f"  Peak speed:       {peak_speed:.2f} m/s")
-    print(f"  Discarded frames: {discarded} (speed > {MAX_PLAUSIBLE_SPEED} m/s or conf < {KP_CONF_COM})")
-
-if __name__ == '__main__':
-    main()
+    // Always output to plotter (even when not logging a trial)
+    // Comment out this block if you only want trial data
+    if (!logging && (now_ms - last_log_ms >= LOG_INTERVAL_MS)) {
+        last_log_ms = now_ms;
+        //Serial.print("Ax(m/s2):"); Serial.print(ax_hp,3); Serial.print(",");
+        //Serial.print("Ay(m/s2):"); Serial.print(ay_hp,3); Serial.print(",");
+        //Serial.print("Az(m/s2):"); Serial.print(az_hp,3); Serial.print(",");
+        Serial.print("Vx(m/s):");  Serial.print(vx,3);    Serial.print(",");
+        Serial.print("Vy(m/s):");  Serial.print(vy,3);    Serial.print(",");
+        Serial.print("Vz(m/s):");  Serial.print(vz,3);    Serial.print(",");
+        Serial.print("Speed(m/s):"); Serial.println(speed,3);
+    }
+}
